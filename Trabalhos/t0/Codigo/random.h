@@ -5,4 +5,4 @@
 
 err_t random_leitura(void *disp, int id, int *pvalor);
 
-#endif RANDOM_H
+#endif
