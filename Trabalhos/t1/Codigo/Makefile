@@ -1,3 +1,5 @@
+SHELL := /bin/bash
+
 # configuração para o make, para a compilação do simulador e do montador
 # se alterar este arquivo, cuidado para manter os caracteres "tab" no início das linhas de continuação
 
