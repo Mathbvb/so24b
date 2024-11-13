@@ -52,6 +52,13 @@ struct so_t {
   int max_processos;
 };
 
+
+// função de calculo de terminal
+int terminal_processo(int terminal, int tipo){
+  return terminal + tipo;
+}
+
+
 // função de tratamento de interrupção (entrada no SO)
 static int so_trata_interrupcao(void *argC, int reg_A);
 
@@ -242,6 +249,20 @@ static void so_trata_pendencias(so_t *self)
   // - E/S pendente
   // - desbloqueio de processos
   // - contabilidades
+
+  for (int i = 0; i < self->qnt_processos; i++){
+    processo_t *proc = self->tabela_processos[i];
+
+    if (proc->estado == BLOQUEADO){
+      int estado;
+      int terminal = proc->terminal;
+
+      if (es_le(self->es, terminal_processo(terminal, TECLADO_OK), &estado) == ERR_OK && estado != 0){
+        proc->estado = PRONTO;
+      }
+    }
+  }
+
 }
 
 // escalonador simples
@@ -432,10 +453,6 @@ static void so_trata_irq_chamada_sistema(so_t *self)
   }
 }
 
-int terminal_processo(int terminal, int tipo){
-  return terminal + tipo;
-}
-
 // implementação da chamada se sistema SO_LE
 // faz a leitura de um dado da entrada corrente do processo, coloca o dado no reg A
 static void so_chamada_le(so_t *self)
@@ -452,20 +469,18 @@ static void so_chamada_le(so_t *self)
 
   int terminal = self->processo_corrente->terminal;
 
-  for (;;) {
-    int estado;
-    if (es_le(self->es, terminal_processo(terminal, TECLADO_OK), &estado) != ERR_OK) {
-      console_printf("SO: problema no acesso ao estado do teclado");
-      self->erro_interno = true;
-      return;
-    }
-    if (estado != 0) break;
-    // como não está saindo do SO, a unidade de controle não está executando seu laço.
-    // esta gambiarra faz pelo menos a console ser atualizada
-    // T1: com a implementação de bloqueio de processo, esta gambiarra não
-    //   deve mais existir.
-    console_tictac(self->console);
+  int estado;
+  if (es_le(self->es, terminal_processo(terminal, TECLADO_OK), &estado) != ERR_OK) {
+    console_printf("SO: problema no acesso ao estado do teclado");
+    self->erro_interno = true;
+    return;
   }
+  if (estado == 0){
+    console_printf("SO: teclado não disponível");
+    self->processo_corrente->estado = BLOQUEADO;
+    return;
+  }
+
   int dado;
   if (es_le(self->es, terminal_processo(terminal, TECLADO), &dado) != ERR_OK) {
     console_printf("SO: problema no acesso ao teclado");
@@ -478,6 +493,7 @@ static void so_chamada_le(so_t *self)
   // T1: o acesso só deve ser feito nesse momento se for possível; se não, o processo
   //   é bloqueado, e o acesso só deve ser feito mais tarde (e o processo desbloqueado)
   mem_escreve(self->mem, IRQ_END_A, dado);
+  self->processo_corrente->estado = PRONTO;
 }
 
 // implementação da chamada se sistema SO_ESCR
@@ -594,8 +610,24 @@ static void so_chamada_espera_proc(so_t *self)
 {
   // T1: deveria bloquear o processo se for o caso (e desbloquear na morte do esperado)
   // ainda sem suporte a processos, retorna erro -1
-  console_printf("SO: SO_ESPERA_PROC não implementada");
-  mem_escreve(self->mem, IRQ_END_A, -1);
+  processo_t *proc = self->processo_corrente;
+  int id_alvo = proc->reg_x;
+
+  processo_t *alvo = busca_processo(self, id_alvo);
+
+  if (alvo == NULL || alvo == proc){
+    proc->reg_a = -1;
+    return;
+  }
+
+  if (alvo->estado != MORTO){
+    proc->estado = BLOQUEADO;
+  }
+  else {
+    proc->estado = PRONTO;
+  }
+
+  proc->reg_a = 0;
 }
 
 // CARGA DE PROGRAMA {{{1
