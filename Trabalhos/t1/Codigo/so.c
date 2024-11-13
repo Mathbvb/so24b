@@ -16,13 +16,13 @@
 // CONSTANTES E TIPOS {{{1
 // intervalo entre interrupções do relógio
 #define INTERVALO_INTERRUPCAO 50   // em instruções executadas
+#define TAM_TABELA_PROCESSOS 8
 
 typedef struct processo_t processo_t;
-typedef struct tabela_processos_t table_t;
 
 typedef enum {
   MORTO,
-  EXECUTANDO,
+  BLOQUEADO,
   PRONTO
 } process_estado_t;
 
@@ -33,12 +33,8 @@ struct processo_t {
   int reg_x;
   int reg_pc;
   process_estado_t estado;
-};
 
-//Legenda estado: 0 = esperando, 1 = executando
-struct tabela_processos_t {
-  processo_t proc;
-  table_t *next;
+  int terminal;
 };
 
 struct so_t {
@@ -51,17 +47,15 @@ struct so_t {
   // t1: tabela de processos, processo corrente, pendências, etc
 
   processo_t *processo_corrente;
-  table_t *tabela_processos;
-  int max_pid;
+  processo_t **tabela_processos;
+  int qnt_processos;
+  int max_processos;
 };
 
 // função de tratamento de interrupção (entrada no SO)
 static int so_trata_interrupcao(void *argC, int reg_A);
 
 // funções auxiliares
-
-// adiciona processo na tabela
-static processo_t *so_adiciona_processo(so_t *self, char *nome_do_executavel);
 
 // carrega o programa contido no arquivo na memória do processador; retorna end. inicial
 static int so_carrega_programa(so_t *self, char *nome_do_executavel);
@@ -71,70 +65,58 @@ static bool copia_str_da_mem(int tam, char str[tam], mem_t *mem, int ender);
 
 // TABELA DE PROCESSOS {{{1
 // funções auxiliares para a tabela de processos
-static table_t *cria_tabela_processos();
-//static void destroi_tabela_processos(table_t *tabela);
 static processo_t *cria_processo(int process_id, int reg_pc);
-//static void destroi_processo(processo_t *processo);
-static void insere_processo(table_t *tabela, processo_t *processo);
-static void mata_processo(table_t *tabela, int process_id);
-static processo_t *busca_processo(table_t *tabela, int process_id);
-
-static table_t *cria_tabela_processos(){
-  table_t *tabela = malloc(sizeof(table_t));
-  tabela->next = NULL;
-  return tabela;
-}
-
-/*static void destroi_tabela_processos(table_t *tabela){
-  if(tabela->next != NULL){
-    destroi_tabela_processos(tabela->next);
-  }
-  free(tabela);
-}*/
+static void mata_processo(so_t *self, int process_id);
+static processo_t *busca_processo(so_t *self, int process_id);
+static processo_t *so_adiciona_processo(so_t *self, char *nome_do_executavel);
 
 static processo_t *cria_processo(int process_id, int reg_pc){
   processo_t *processo = malloc(sizeof(processo_t));
+
   processo->process_id = process_id;
+
   processo->reg_a = 0;
   processo->reg_x = 0;
   processo->reg_pc = reg_pc;
+
   processo->estado = PRONTO;
+
+  processo->terminal = (process_id % 4) * 4;
+
   return processo;
 }
 
-/*static void destroi_processo(processo_t *processo){
-  free(processo);
-}*/
+static void mata_processo(so_t *self, int process_id){
+  if (process_id <= 0 || process_id > self->qnt_processos) return;
 
-static void insere_processo(table_t *tabela, processo_t *processo) {
-  if(tabela->next == NULL){
-    tabela->next = malloc(sizeof(table_t));
-    tabela->next->proc = *processo;
-    tabela->next->next = NULL;
-  } else {
-    insere_processo(tabela->next, processo);
-  }
+  processo_t *proc = self->tabela_processos[process_id-1];
+  proc->estado = MORTO;
 }
 
-static void mata_processo(table_t *tabela, int process_id){
-  if(tabela->proc.process_id == process_id) {
-    tabela->proc.estado = MORTO;
-    return;    
-  }
-  else {
-    mata_processo(tabela->next, process_id);
-  }
+static processo_t *busca_processo(so_t *self, int process_id){
+  if (process_id <= 0 || process_id > self->qnt_processos) return NULL;
+
+  return self->tabela_processos[process_id-1];
 }
 
-static processo_t *busca_processo(table_t *tabela, int process_id){
-  if(tabela->proc.process_id == process_id){
-    return &tabela->proc;
-  } else {
-    if(tabela->next != NULL){
-      return busca_processo(tabela->next, process_id);
-    }
+static processo_t *so_adiciona_processo(so_t *self, char *nome_do_executavel){
+  int ender = so_carrega_programa(self, nome_do_executavel);
+
+  if (ender < 0) {
+    return NULL;
   }
-  return NULL;
+
+  if (self->qnt_processos == self->max_processos){
+    self->max_processos = self->max_processos * 2;
+    self->tabela_processos = realloc(self->tabela_processos, self->max_processos * sizeof(*self->tabela_processos));
+  }
+
+  self->qnt_processos++;
+  processo_t *processo = cria_processo(self->qnt_processos, ender);
+  self->tabela_processos[self->qnt_processos - 1] = processo;
+  self->processo_corrente = processo;
+
+  return processo;
 }
 
 // CRIAÇÃO {{{1
@@ -150,9 +132,10 @@ so_t *so_cria(cpu_t *cpu, mem_t *mem, es_t *es, console_t *console)
   self->console = console;
   self->erro_interno = false;
 
+  self->qnt_processos = 0;
+  self->max_processos = TAM_TABELA_PROCESSOS;
   self->processo_corrente = NULL;
-  self->tabela_processos = cria_tabela_processos();
-  self->max_pid = 1;
+  self->tabela_processos = malloc(self->max_processos * sizeof(processo_t *));
 
   // quando a CPU executar uma instrução CHAMAC, deve chamar a função
   //   so_trata_interrupcao, com primeiro argumento um ptr para o SO
@@ -177,6 +160,8 @@ so_t *so_cria(cpu_t *cpu, mem_t *mem, es_t *es, console_t *console)
     console_printf("SO: problema na programação do timer");
     self->erro_interno = true;
   }
+
+  console_printf("1");
 
   return self;
 }
@@ -266,20 +251,17 @@ static void so_escalona(so_t *self)
   //   corrente; pode continuar sendo o mesmo de antes ou não
   // t1: na primeira versão, escolhe um processo caso o processo corrente não possa continuar
   //   executando. depois, implementar escalonador melhor
-
+  
   if (self->processo_corrente != NULL && self->processo_corrente->estado == PRONTO) {
     console_printf("SO: processo corrente pronto");
     return;
   }
 
-  table_t *aux = self->tabela_processos;
-  while(aux->next != NULL){
-    if(aux->proc.estado == PRONTO){
-      console_printf("SO: processo %d pronto, executando...", aux->proc.process_id);
-      self->processo_corrente = &aux->proc;
+  for (int i = 0; i < self->qnt_processos; i++){
+    if (self->tabela_processos[i]->estado == PRONTO){
+      self->processo_corrente = self->tabela_processos[i];
       return;
     }
-    aux = aux->next;
   }
 
   console_printf("SO: não há processos prontos");
@@ -350,7 +332,6 @@ static void so_trata_irq_reset(so_t *self)
   //   para os seus registradores quando executar a instrução RETI
 
   // coloca o programa init na memória
-
   processo_t *init = so_adiciona_processo(self, "init.maq");
 
   if (init->reg_pc != 100) {
@@ -396,7 +377,7 @@ static void so_trata_irq_relogio(so_t *self)
   // t1: deveria tratar a interrupção
   //   por exemplo, decrementa o quantum do processo corrente, quando se tem
   //   um escalonador com quantum
-  console_printf("SO: interrupção do relógio (não tratada)");
+  // console_printf("SO: interrupção do relógio (não tratada)");
 }
 
 // foi gerada uma interrupção para a qual o SO não está preparado
@@ -451,6 +432,10 @@ static void so_trata_irq_chamada_sistema(so_t *self)
   }
 }
 
+int terminal_processo(int terminal, int tipo){
+  return terminal + tipo;
+}
+
 // implementação da chamada se sistema SO_LE
 // faz a leitura de um dado da entrada corrente do processo, coloca o dado no reg A
 static void so_chamada_le(so_t *self)
@@ -464,9 +449,12 @@ static void so_chamada_le(so_t *self)
   //     o caso
   // implementação lendo direto do terminal A
   //   T1: deveria usar dispositivo de entrada corrente do processo
+
+  int terminal = self->processo_corrente->terminal;
+
   for (;;) {
     int estado;
-    if (es_le(self->es, D_TERM_A_TECLADO_OK, &estado) != ERR_OK) {
+    if (es_le(self->es, terminal_processo(terminal, TECLADO_OK), &estado) != ERR_OK) {
       console_printf("SO: problema no acesso ao estado do teclado");
       self->erro_interno = true;
       return;
@@ -479,7 +467,7 @@ static void so_chamada_le(so_t *self)
     console_tictac(self->console);
   }
   int dado;
-  if (es_le(self->es, D_TERM_A_TECLADO, &dado) != ERR_OK) {
+  if (es_le(self->es, terminal_processo(terminal, TECLADO), &dado) != ERR_OK) {
     console_printf("SO: problema no acesso ao teclado");
     self->erro_interno = true;
     return;
@@ -500,9 +488,12 @@ static void so_chamada_escr(so_t *self)
   //   T1: deveria bloquear o processo se dispositivo ocupado
   // implementação escrevendo direto do terminal A
   //   T1: deveria usar o dispositivo de saída corrente do processo
+
+  int terminal = self->processo_corrente->terminal;
+
   for (;;) {
     int estado;
-    if (es_le(self->es, D_TERM_A_TELA_OK, &estado) != ERR_OK) {
+    if (es_le(self->es, terminal_processo(terminal, TELA_OK), &estado) != ERR_OK) {
       console_printf("SO: problema no acesso ao estado da tela");
       self->erro_interno = true;
       return;
@@ -520,7 +511,7 @@ static void so_chamada_escr(so_t *self)
   // T1: caso o processo tenha sido bloqueado, esse acesso deve ser realizado em outra execução
   //   do SO, quando ele verificar que esse acesso já pode ser feito.
   mem_le(self->mem, IRQ_END_X, &dado);
-  if (es_escreve(self->es, D_TERM_A_TELA, dado) != ERR_OK) {
+  if (es_escreve(self->es, terminal_processo(terminal, TELA), dado) != ERR_OK) {
     console_printf("SO: problema no acesso à tela");
     self->erro_interno = true;
     return;
@@ -576,16 +567,19 @@ static void so_chamada_mata_proc(so_t *self)
 
   int pid_matar = proc->reg_x;
 
-  processo_t *aux = busca_processo(self->tabela_processos, pid_matar);
+  processo_t *aux = busca_processo(self, pid_matar);
 
   console_printf("SO: processo %d vai matar processo %d", proc->process_id, pid_matar);
 
   if (pid_matar == 0){
     aux = self->processo_corrente;
+    mata_processo(self, aux->process_id);
+    console_printf("SO: processo morto, aqui!");
+    proc->reg_a = 0;
   }
-  if (aux != NULL){
-    mata_processo(self->tabela_processos, pid_matar);
-    console_printf("SO: processo %d morto", pid_matar);
+  else if (aux != NULL){
+    mata_processo(self, pid_matar);
+    console_printf("SO: processo %d morto, acá", pid_matar);
     proc->reg_a = 0;
   }
   else{
@@ -602,22 +596,6 @@ static void so_chamada_espera_proc(so_t *self)
   // ainda sem suporte a processos, retorna erro -1
   console_printf("SO: SO_ESPERA_PROC não implementada");
   mem_escreve(self->mem, IRQ_END_A, -1);
-}
-
-static processo_t *so_adiciona_processo(so_t *self, char *nome_do_executavel)
-{
-  int ender = so_carrega_programa(self, nome_do_executavel);
-
-  if (ender < 0) {
-    return NULL;
-  }
-
-  processo_t *processo = cria_processo(self->max_pid, ender);
-  self->max_pid++;
-  insere_processo(self->tabela_processos, processo);
-  self->processo_corrente = processo;
-
-  return processo;
 }
 
 // CARGA DE PROGRAMA {{{1
