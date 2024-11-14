@@ -274,7 +274,7 @@ static void so_escalona(so_t *self)
   //   executando. depois, implementar escalonador melhor
   
   if (self->processo_corrente != NULL && self->processo_corrente->estado == PRONTO) {
-    console_printf("SO: processo corrente pronto");
+    //console_printf("SO: processo corrente pronto");
     return;
   }
 
@@ -285,7 +285,7 @@ static void so_escalona(so_t *self)
     }
   }
 
-  console_printf("SO: não há processos prontos");
+  //console_printf("SO: não há processos prontos");
   self->processo_corrente = NULL;
   self->erro_interno = true;
 }
@@ -507,32 +507,32 @@ static void so_chamada_escr(so_t *self)
 
   int terminal = self->processo_corrente->terminal;
 
-  for (;;) {
-    int estado;
-    if (es_le(self->es, terminal_processo(terminal, TELA_OK), &estado) != ERR_OK) {
-      console_printf("SO: problema no acesso ao estado da tela");
-      self->erro_interno = true;
-      return;
-    }
-    if (estado != 0) break;
-    // como não está saindo do SO, a unidade de controle não está executando seu laço.
-    // esta gambiarra faz pelo menos a console ser atualizada
-    // T1: não deve mais existir quando houver suporte a processos, porque o SO não poderá
-    //   executar por muito tempo, permitindo a execução do laço da unidade de controle
-    console_tictac(self->console);
-  }
-  int dado;
-  // está lendo o valor de X e escrevendo o de A direto onde o processador colocou/vai pegar
-  // T1: deveria usar os registradores do processo que está realizando a E/S
-  // T1: caso o processo tenha sido bloqueado, esse acesso deve ser realizado em outra execução
-  //   do SO, quando ele verificar que esse acesso já pode ser feito.
-  mem_le(self->mem, IRQ_END_X, &dado);
-  if (es_escreve(self->es, terminal_processo(terminal, TELA), dado) != ERR_OK) {
-    console_printf("SO: problema no acesso à tela");
+ 
+  int estado;
+
+  if (es_le(self->es, terminal_processo(terminal, TELA_OK), &estado) != ERR_OK) {
+    console_printf("SO: problema no acesso ao estado da tela");
     self->erro_interno = true;
     return;
   }
-  mem_escreve(self->mem, IRQ_END_A, 0);
+  if (estado == 0){
+    console_printf("SO: tela não disponível");
+    self->processo_corrente->estado = BLOQUEADO;
+    return;
+  }
+  else {
+    int dado;
+
+    mem_le(self->mem, IRQ_END_X, &dado);
+    if (es_escreve(self->es, terminal_processo(terminal, TELA), dado) != ERR_OK) {
+      console_printf("SO: problema no acesso à tela");
+      self->erro_interno = true;
+      return;
+    }
+
+    self->processo_corrente->estado = PRONTO;
+    mem_escreve(self->mem, IRQ_END_A, 0);
+  }
 }
 
 // implementação da chamada se sistema SO_CRIA_PROC
