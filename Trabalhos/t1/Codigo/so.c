@@ -26,7 +26,7 @@ typedef enum {
   PRONTO
 } process_estado_t;
 
-
+// r_bloq == 0 leitura, 1 escrita
 struct processo_t {
   int process_id;
   int reg_a;
@@ -34,6 +34,7 @@ struct processo_t {
   int reg_pc;
   process_estado_t estado;
 
+  int r_bloq;
   int terminal;
 };
 
@@ -242,6 +243,51 @@ static void so_salva_estado_da_cpu(so_t *self)
   proc->reg_x = x;
 }
 
+void trata_le(so_t *self){
+  int estado;
+  int terminal = self->processo_corrente->terminal;
+
+  if (es_le(self->es, terminal_processo(terminal, TECLADO_OK), &estado) != ERR_OK) {
+    self->erro_interno = true;
+    return;
+  }
+
+  if (estado == 0){
+    return;
+  }
+
+  int dado;
+  if (es_le(self->es, terminal_processo(terminal, TECLADO), &dado) != ERR_OK) {
+    self->erro_interno = true;
+    return;
+  }
+
+  self->processo_corrente->reg_a = dado;
+  self->processo_corrente->estado = PRONTO;
+}
+
+void trata_escreve(so_t *self){
+  int estado;
+  int terminal = self->processo_corrente->terminal;
+
+  if (es_le(self->es, terminal_processo(terminal, TELA_OK), &estado) != ERR_OK) {
+    self->erro_interno = true;
+    return;
+  }
+  if (estado == 0){
+    return;
+  }
+
+  int dado = self->processo_corrente->reg_x;
+  if (es_escreve(self->es, terminal_processo(terminal, TELA), dado) != ERR_OK) {
+    self->erro_interno = true;
+    return;
+  }
+
+  self->processo_corrente->reg_a = 0;
+  self->processo_corrente->estado = PRONTO;
+}
+
 static void so_trata_pendencias(so_t *self)
 {
   // t1: realiza ações que não são diretamente ligadas com a interrupção que
@@ -254,12 +300,19 @@ static void so_trata_pendencias(so_t *self)
     processo_t *proc = self->tabela_processos[i];
 
     if (proc->estado == BLOQUEADO){
-      int estado;
-      int terminal = proc->terminal;
+      int razao = proc->r_bloq;
 
-      if (es_le(self->es, terminal_processo(terminal, TECLADO_OK), &estado) == ERR_OK && estado != 0){
-        proc->estado = PRONTO;
-      }
+      switch (razao){
+        case 0:
+          trata_le(self);
+          break;
+        case 1:
+          trata_escreve(self);
+          break;
+        
+        default:
+          break;
+      }      
     }
   }
 
@@ -478,6 +531,7 @@ static void so_chamada_le(so_t *self)
   if (estado == 0){
     console_printf("SO: teclado não disponível");
     self->processo_corrente->estado = BLOQUEADO;
+    self->processo_corrente->r_bloq = 0;
     return;
   }
 
@@ -518,6 +572,7 @@ static void so_chamada_escr(so_t *self)
   if (estado == 0){
     console_printf("SO: tela não disponível");
     self->processo_corrente->estado = BLOQUEADO;
+    self->processo_corrente->r_bloq = 1;
     return;
   }
   else {
