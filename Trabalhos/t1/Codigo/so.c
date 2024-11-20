@@ -29,6 +29,7 @@ typedef enum {
 typedef enum {
   ESCRITA,
   LEITURA,
+  ESPERANDO_MORRER,
   OK
 } process_r_bloq_t;
 
@@ -227,6 +228,7 @@ static int so_trata_interrupcao(void *argC, int reg_A)
   // escolhe o próximo processo a executar
   so_escalona(self);
   // recupera o estado do processo escolhido
+
   return so_despacha(self);
 }
 
@@ -251,53 +253,42 @@ static void so_salva_estado_da_cpu(so_t *self)
   proc->reg_x = x;
 }
 
-void trata_le(so_t *self){
+void trata_le(so_t *self, processo_t *proc){
   int estado;
-  processo_t *proc = self->processo_corrente;
   int terminal = proc->terminal;
 
-  if (es_le(self->es, terminal_processo(terminal, TECLADO_OK), &estado) != ERR_OK) {
-    self->erro_interno = true;
-    return;
+  if (es_le(self->es, terminal_processo(terminal, TECLADO_OK), &estado) == ERR_OK && estado != 0) {
+    proc->razao = OK;
+    proc->estado = PRONTO;
   }
-
-  if (estado == 0){
-    return;
-  }
-
-  int dado;
-  if (es_le(self->es, terminal_processo(terminal, TECLADO), &dado) != ERR_OK) {
-    self->erro_interno = true;
-    return;
-  }
-
-  proc->reg_a = dado;
-  proc->razao = OK;
-  proc->estado = PRONTO;
+  return;
 }
 
-void trata_escreve(so_t *self){
+void trata_escreve(so_t *self, processo_t *proc){
   int estado;
-  processo_t *proc = self->processo_corrente;
   int terminal = proc->terminal;
 
-  if (es_le(self->es, terminal_processo(terminal, TELA_OK), &estado) != ERR_OK) {
-    self->erro_interno = true;
-    return;
+  if (es_le(self->es, terminal_processo(terminal, TELA_OK), &estado) == ERR_OK && estado != 0) {
+    int dado = proc->reg_x;
+    if (es_escreve(self->es, terminal_processo(terminal, TELA), dado) == ERR_OK) {
+      proc->razao = OK;
+      proc->estado = PRONTO;
+      console_printf("SO: desbloqueado terminal %d. haha", terminal);
+    }
   }
-  if (estado == 0){
-    return;
-  }
+  return;
+}
 
-  int dado = proc->reg_x;
-  if (es_escreve(self->es, terminal_processo(terminal, TELA), dado) != ERR_OK) {
-    self->erro_interno = true;
+static void trata_espera(so_t *self, processo_t *proc){
+  int id_alvo = proc->reg_x;
+
+  processo_t *alvo = busca_processo(self, id_alvo);
+
+  if (alvo->estado == MORTO){
+    proc->estado = PRONTO;
+    proc->razao = OK;
     return;
   }
-
-  proc->reg_a = 0;
-  proc->razao = OK;
-  proc->estado = PRONTO;
 }
 
 static void so_trata_pendencias(so_t *self)
@@ -316,10 +307,13 @@ static void so_trata_pendencias(so_t *self)
 
       switch (razao){
         case LEITURA:
-          trata_le(self);
+          trata_le(self, proc);
           break;
         case ESCRITA:
-          trata_escreve(self);
+          trata_escreve(self, proc);
+          break;
+        case ESPERANDO_MORRER:
+          trata_espera(self, proc);
           break;
         
         default:
@@ -330,6 +324,24 @@ static void so_trata_pendencias(so_t *self)
 
 }
 
+processo_t *proximo(so_t *self){
+  for (int i = 0; i < self->qnt_processos; i++){
+    if (self->tabela_processos[i]->estado == PRONTO){
+      return self->tabela_processos[i];
+    }
+  }
+  return NULL;
+}
+
+bool tem_bloqueado(so_t *self){
+  for (int i = 0; i < self->qnt_processos; i++){
+    if (self->tabela_processos[i]->estado == BLOQUEADO){
+      return true;
+    }
+  }
+  return false;
+}
+
 // escalonador simples
 static void so_escalona(so_t *self)
 {
@@ -337,22 +349,26 @@ static void so_escalona(so_t *self)
   //   corrente; pode continuar sendo o mesmo de antes ou não
   // t1: na primeira versão, escolhe um processo caso o processo corrente não possa continuar
   //   executando. depois, implementar escalonador melhor
-  
+
+
   if (self->processo_corrente != NULL && self->processo_corrente->estado == PRONTO) {
-    //console_printf("SO: processo corrente pronto");
     return;
   }
 
-  for (int i = 0; i < self->qnt_processos; i++){
-    if (self->tabela_processos[i]->estado == PRONTO){
-      self->processo_corrente = self->tabela_processos[i];
-      return;
-    }
+  processo_t *prox = proximo(self);
+  if (prox != NULL){
+    self->processo_corrente = prox;
+    return;
   }
 
-  //console_printf("SO: não há processos prontos");
-  self->processo_corrente = NULL;
-  self->erro_interno = true;
+  bool tem_bloq = tem_bloqueado(self);
+  if (tem_bloq){
+    self->processo_corrente = NULL;
+  }
+  else{
+    console_printf("SO: não há processos prontos");
+    self->erro_interno = true;
+  }
 }
 
 static int so_despacha(so_t *self)
@@ -559,7 +575,6 @@ static void so_chamada_le(so_t *self)
   // T1: o acesso só deve ser feito nesse momento se for possível; se não, o processo
   //   é bloqueado, e o acesso só deve ser feito mais tarde (e o processo desbloqueado)
   mem_escreve(self->mem, IRQ_END_A, dado);
-  self->processo_corrente->estado = PRONTO;
 }
 
 // implementação da chamada se sistema SO_ESCR
@@ -597,7 +612,6 @@ static void so_chamada_escr(so_t *self)
       return;
     }
 
-    self->processo_corrente->estado = PRONTO;
     mem_escreve(self->mem, IRQ_END_A, 0);
   }
 }
@@ -689,11 +703,12 @@ static void so_chamada_espera_proc(so_t *self)
 
   if (alvo->estado != MORTO){
     proc->estado = BLOQUEADO;
-  }
-  else {
-    proc->estado = PRONTO;
+    proc->razao = ESPERANDO_MORRER;
+    return;
   }
 
+  proc->estado = PRONTO;
+  proc->razao = OK;
   proc->reg_a = 0;
 }
 
