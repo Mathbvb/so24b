@@ -26,15 +26,22 @@ typedef enum {
   PRONTO
 } process_estado_t;
 
+typedef enum {
+  ESCRITA,
+  LEITURA,
+  OK
+} process_r_bloq_t;
+
 // r_bloq == 0 leitura, 1 escrita
 struct processo_t {
   int process_id;
   int reg_a;
   int reg_x;
   int reg_pc;
-  process_estado_t estado;
 
-  int r_bloq;
+  process_estado_t estado;
+  process_r_bloq_t razao;
+
   int terminal;
 };
 
@@ -88,6 +95,7 @@ static processo_t *cria_processo(int process_id, int reg_pc){
   processo->reg_pc = reg_pc;
 
   processo->estado = PRONTO;
+  processo->razao = OK;
 
   processo->terminal = (process_id % 4) * 4;
 
@@ -245,7 +253,8 @@ static void so_salva_estado_da_cpu(so_t *self)
 
 void trata_le(so_t *self){
   int estado;
-  int terminal = self->processo_corrente->terminal;
+  processo_t *proc = self->processo_corrente;
+  int terminal = proc->terminal;
 
   if (es_le(self->es, terminal_processo(terminal, TECLADO_OK), &estado) != ERR_OK) {
     self->erro_interno = true;
@@ -262,13 +271,15 @@ void trata_le(so_t *self){
     return;
   }
 
-  self->processo_corrente->reg_a = dado;
-  self->processo_corrente->estado = PRONTO;
+  proc->reg_a = dado;
+  proc->razao = OK;
+  proc->estado = PRONTO;
 }
 
 void trata_escreve(so_t *self){
   int estado;
-  int terminal = self->processo_corrente->terminal;
+  processo_t *proc = self->processo_corrente;
+  int terminal = proc->terminal;
 
   if (es_le(self->es, terminal_processo(terminal, TELA_OK), &estado) != ERR_OK) {
     self->erro_interno = true;
@@ -278,14 +289,15 @@ void trata_escreve(so_t *self){
     return;
   }
 
-  int dado = self->processo_corrente->reg_x;
+  int dado = proc->reg_x;
   if (es_escreve(self->es, terminal_processo(terminal, TELA), dado) != ERR_OK) {
     self->erro_interno = true;
     return;
   }
 
-  self->processo_corrente->reg_a = 0;
-  self->processo_corrente->estado = PRONTO;
+  proc->reg_a = 0;
+  proc->razao = OK;
+  proc->estado = PRONTO;
 }
 
 static void so_trata_pendencias(so_t *self)
@@ -300,13 +312,13 @@ static void so_trata_pendencias(so_t *self)
     processo_t *proc = self->tabela_processos[i];
 
     if (proc->estado == BLOQUEADO){
-      int razao = proc->r_bloq;
+      int razao = proc->razao;
 
       switch (razao){
-        case 0:
+        case LEITURA:
           trata_le(self);
           break;
-        case 1:
+        case ESCRITA:
           trata_escreve(self);
           break;
         
@@ -531,7 +543,7 @@ static void so_chamada_le(so_t *self)
   if (estado == 0){
     console_printf("SO: teclado não disponível");
     self->processo_corrente->estado = BLOQUEADO;
-    self->processo_corrente->r_bloq = 0;
+    self->processo_corrente->razao = LEITURA;
     return;
   }
 
@@ -572,7 +584,7 @@ static void so_chamada_escr(so_t *self)
   if (estado == 0){
     console_printf("SO: tela não disponível");
     self->processo_corrente->estado = BLOQUEADO;
-    self->processo_corrente->r_bloq = 1;
+    self->processo_corrente->razao = ESCRITA;
     return;
   }
   else {
