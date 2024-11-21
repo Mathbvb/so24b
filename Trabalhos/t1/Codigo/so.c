@@ -178,8 +178,6 @@ so_t *so_cria(cpu_t *cpu, mem_t *mem, es_t *es, console_t *console)
     self->erro_interno = true;
   }
 
-  console_printf("1");
-
   return self;
 }
 
@@ -253,6 +251,22 @@ static void so_salva_estado_da_cpu(so_t *self)
   proc->reg_x = x;
 }
 
+// função que ajusta a fila de processos, coloca o processo no fim da fila
+void ajusta_fila(so_t *self, processo_t *proc){
+  int i, j;
+  for (i = 0; i < self->qnt_processos - 1; i++){
+    if (self->tabela_processos[i] == proc){
+      break;
+    }
+  }
+  
+  for (j = i; j < self->qnt_processos - 1; j++){
+    self->tabela_processos[j] = self->tabela_processos[j+1];
+  }
+
+  self->tabela_processos[self->qnt_processos - 1] = proc;
+}
+
 void trata_le(so_t *self, processo_t *proc){
   int estado;
   int terminal = proc->terminal;
@@ -260,6 +274,8 @@ void trata_le(so_t *self, processo_t *proc){
   if (es_le(self->es, terminal_processo(terminal, TECLADO_OK), &estado) == ERR_OK && estado != 0) {
     proc->razao = OK;
     proc->estado = PRONTO;
+    //ajusta_fila(self, proc);
+    console_printf("SO: desbloqueado processo %d. haha - leitura", proc->process_id);
   }
   return;
 }
@@ -273,7 +289,8 @@ void trata_escreve(so_t *self, processo_t *proc){
     if (es_escreve(self->es, terminal_processo(terminal, TELA), dado) == ERR_OK) {
       proc->razao = OK;
       proc->estado = PRONTO;
-      console_printf("SO: desbloqueado terminal %d. haha", terminal);
+      //ajusta_fila(self, proc);
+      console_printf("SO: desbloqueado processo %d. haha - escrita", proc->process_id);
     }
   }
   return;
@@ -287,6 +304,8 @@ static void trata_espera(so_t *self, processo_t *proc){
   if (alvo->estado == MORTO){
     proc->estado = PRONTO;
     proc->razao = OK;
+    //ajusta_fila(self, proc);
+    console_printf("SO: desbloqueado processo %d. haha - espera", proc->process_id);
     return;
   }
 }
@@ -443,7 +462,7 @@ static void so_trata_irq_reset(so_t *self)
   }
 
   // altera o PC para o endereço de carga
-  mem_escreve(self->mem, IRQ_END_PC, self->processo_corrente->reg_pc);
+  //mem_escreve(self->mem, IRQ_END_PC, self->processo_corrente->reg_pc);
   // passa o processador para modo usuário
   mem_escreve(self->mem, IRQ_END_modo, usuario);
 }
