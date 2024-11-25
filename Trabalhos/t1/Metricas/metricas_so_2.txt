@@ -1,0 +1,59 @@
+MÉTRICAS DO SO:
+
+Tempo total: 22896
+Tempo ocioso: 3445
+Número de processos: 4
+Preempções: 59
+Interrupção 0: 1
+Interrupção 1: 0
+Interrupção 2: 462
+Interrupção 3: 456
+Interrupção 4: 0
+Interrupção 5: 0
+
+MÉTRICAS DOS PROCESSOS:
+
+Processo 1
+Tempo de retorno: 22896
+Preempções: 2
+Tempo de resposta: 185
+Tempo no estado 0: 0
+Número de vezes no estado 0: 1
+Tempo no estado 1: 22153
+Número de vezes no estado 1: 2
+Tempo no estado 2: 743
+Número de vezes no estado 2: 4
+
+Processo 2
+Tempo de retorno: 17744
+Preempções: 39
+Tempo de resposta: 1911
+Tempo no estado 0: 4769
+Número de vezes no estado 0: 1
+Tempo no estado 1: 537
+Número de vezes no estado 1: 8
+Tempo no estado 2: 17207
+Número de vezes no estado 2: 9
+
+Processo 3
+Tempo de retorno: 11728
+Preempções: 13
+Tempo de resposta: 760
+Tempo no estado 0: 10777
+Número de vezes no estado 0: 1
+Tempo no estado 1: 1082
+Número de vezes no estado 1: 13
+Tempo no estado 2: 10646
+Número de vezes no estado 2: 14
+
+Processo 4
+Tempo de retorno: 22178
+Preempções: 5
+Tempo de resposta: 162
+Tempo no estado 0: 319
+Número de vezes no estado 0: 1
+Tempo no estado 1: 6217
+Número de vezes no estado 1: 97
+Tempo no estado 2: 15961
+Número de vezes no estado 2: 98
+

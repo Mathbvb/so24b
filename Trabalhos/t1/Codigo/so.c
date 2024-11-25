@@ -12,6 +12,7 @@
 
 #include <stdlib.h>
 #include <stdbool.h>
+#include <stdio.h>
 
 // CONSTANTES E TIPOS {{{1
 // intervalo entre interrupções do relógio
@@ -20,14 +21,17 @@
 
 // define qual o escalonador a ser usado: 0 para simples, 1 para round-robin e 2 para prioridade
 #define ESCALONADOR 2
-#define QUANTUM 10
+#define QUANTUM 5
 
 typedef struct processo_t processo_t;
+typedef struct metricas_so_t metricas_so_t;
+typedef struct metricas_processo_t metricas_processo_t;
 
 typedef enum {
   MORTO,
   BLOQUEADO,
-  PRONTO
+  PRONTO,
+  N_ESTADOS
 } process_estado_t;
 
 typedef enum {
@@ -36,6 +40,23 @@ typedef enum {
   ESPERANDO_MORRER,
   OK
 } process_r_bloq_t;
+
+
+// structs metricas
+struct metricas_so_t {
+  int t_total;
+  int t_ocioso;
+  int n_interrupcoes[N_IRQ];
+  int preempcoes;
+};
+
+struct metricas_processo_t {
+  int t_retorno;
+  int preempcoes;
+  int n_estados[N_ESTADOS];
+  int t_estados[N_ESTADOS];
+  int t_resposta;
+};
 
 struct processo_t {
   int process_id;
@@ -49,6 +70,8 @@ struct processo_t {
   int terminal;
 
   float prioridade;
+
+  metricas_processo_t metricas;
 };
 
 struct so_t {
@@ -66,8 +89,10 @@ struct so_t {
   int max_processos;
 
   int quantum;
-
   processo_t **fila_prontos;
+
+  int relogio;
+  metricas_so_t metricas;
 };
 
 
@@ -95,6 +120,104 @@ static void mata_processo(so_t *self, int process_id);
 static processo_t *busca_processo(so_t *self, int process_id);
 static processo_t *so_adiciona_processo(so_t *self, char *nome_do_executavel);
 
+
+// FUNÇÕES DE METRICAS {{{1
+static void inicializa_metricas_processo(metricas_processo_t *metricas){
+  metricas->t_retorno = 0;
+  metricas->preempcoes = 0;
+  for (int i = 0; i < N_ESTADOS; i++){
+    metricas->n_estados[i] = 0;
+    metricas->t_estados[i] = 0;
+  }
+  metricas->t_resposta = 0;
+
+  metricas->n_estados[PRONTO] = 1;
+}
+
+static void atualiza_metricas_processo(processo_t *proc, int d_tempo){
+  if (proc->estado != MORTO){
+    proc->metricas.t_retorno += d_tempo;
+  }
+  proc->metricas.t_estados[proc->estado] += d_tempo;
+  proc->metricas.t_resposta = proc->metricas.t_estados[PRONTO] / proc->metricas.n_estados[PRONTO];
+}
+
+static void inicializa_metricas_so(metricas_so_t *metricas){
+  metricas->t_total = 0;
+  metricas->t_ocioso = 0;
+  metricas->preempcoes = 0;
+  for (int i = 0; i < N_IRQ; i++){
+    metricas->n_interrupcoes[i] = 0;
+  }
+}
+
+static void atualiza_metricas_so(so_t *self, int d_tempo){
+  self->metricas.t_total += d_tempo;
+  if (self->processo_corrente == NULL){
+    self->metricas.t_ocioso += d_tempo;
+  }
+  for (int i = 0; i < self->qnt_processos; i++){
+    atualiza_metricas_processo(self->tabela_processos[i], d_tempo);
+  }
+}
+
+static void calcula_metricas(so_t *self){
+  int relogio_ant = self->relogio;
+  if (es_le(self->es, D_RELOGIO_INSTRUCOES, &self->relogio) != ERR_OK){
+    console_printf("SO: problema no acesso ao relógio");
+    return;
+  }
+
+  if (relogio_ant != -1){
+    int dif = self->relogio - relogio_ant;
+    atualiza_metricas_so(self, dif);
+  }
+}
+
+int calcula_preempcoes(so_t *self){
+  int preempcoes = 0;
+  for (int i = 0; i < self->qnt_processos; i++){
+    preempcoes += self->tabela_processos[i]->metricas.preempcoes;
+  }
+  return preempcoes;
+}
+
+static void imprime_metricas(so_t *self){
+  self->metricas.preempcoes = calcula_preempcoes(self);
+  char nome[100];
+  sprintf(nome, "../Metricas/metricas_so_%d.txt", ESCALONADOR);
+  FILE *arq = fopen(nome, "w");
+  if (arq == NULL){
+    console_printf("SO: problema na abertura do arquivo de métricas");
+    return;
+  }
+  fprintf(arq, "MÉTRICAS DO SO:\n\n");
+  fprintf(arq, "Tempo total: %d\n", self->metricas.t_total);
+  fprintf(arq, "Tempo ocioso: %d\n", self->metricas.t_ocioso);
+  fprintf(arq, "Número de processos: %d\n", self->qnt_processos);
+  fprintf(arq, "Preempções: %d\n", self->metricas.preempcoes);
+
+  for (int i = 0; i < N_IRQ; i++){
+    fprintf(arq, "Interrupção %d: %d\n", i, self->metricas.n_interrupcoes[i]);
+  }
+
+  fprintf(arq, "\nMÉTRICAS DOS PROCESSOS:\n\n");
+  for (int i = 0; i < self->qnt_processos; i++){
+    processo_t *proc = self->tabela_processos[i];
+    fprintf(arq, "Processo %d\n", proc->process_id);
+    fprintf(arq, "Tempo de retorno: %d\n", proc->metricas.t_retorno);
+    fprintf(arq, "Preempções: %d\n", proc->metricas.preempcoes);
+    fprintf(arq, "Tempo de resposta: %d\n", proc->metricas.t_resposta);
+    for (int j = 0; j < N_ESTADOS; j++){
+      fprintf(arq, "Tempo no estado %d: %d\n", j, proc->metricas.t_estados[j]);
+      fprintf(arq, "Número de vezes no estado %d: %d\n", j, proc->metricas.n_estados[j]);
+    }
+    fprintf(arq, "\n");
+  }
+}
+
+
+
 static processo_t *cria_processo(int process_id, int reg_pc){
   processo_t *processo = malloc(sizeof(processo_t));
 
@@ -110,6 +233,8 @@ static processo_t *cria_processo(int process_id, int reg_pc){
   processo->prioridade = 0.5;
 
   processo->terminal = (process_id % 4) * 4;
+
+  inicializa_metricas_processo(&processo->metricas);
 
   return processo;
 }
@@ -141,6 +266,7 @@ static void mata_processo(so_t *self, int process_id){
 
   processo_t *proc = self->tabela_processos[process_id-1];
   proc->estado = MORTO;
+  proc->metricas.n_estados[proc->estado]++;
 
   remove_fila(self, process_id);
 }
@@ -193,6 +319,10 @@ so_t *so_cria(cpu_t *cpu, mem_t *mem, es_t *es, console_t *console)
   self->fila_prontos = malloc(self->max_processos * sizeof(processo_t *));
   self->quantum = QUANTUM;
 
+  self->relogio = -1;
+
+  inicializa_metricas_so(&self->metricas);
+
   // quando a CPU executar uma instrução CHAMAC, deve chamar a função
   //   so_trata_interrupcao, com primeiro argumento um ptr para o SO
   cpu_define_chamaC(self->cpu, so_trata_interrupcao, self);
@@ -241,6 +371,30 @@ static void so_escalona_prioridade(so_t *self);
 
 static int so_despacha(so_t *self);
 
+bool tudo_morreu(so_t *self){
+  for (int i = 0; i < self->qnt_processos; i++){
+    if (self->tabela_processos[i]->estado != MORTO){
+      return false;
+    }
+  }
+  return true;
+}
+
+static int finaliza_so(so_t *self){
+  err_t e1, e2;
+  e1 = es_escreve(self->es, D_RELOGIO_TIMER, 0);
+  e2 = es_escreve(self->es, D_RELOGIO_INTERRUPCAO, 0);
+  if (e1 != ERR_OK || e2 != ERR_OK)
+  {
+    console_printf("SO: nao consigo desligar o timer!!");
+    self->erro_interno = true;
+  }
+
+  imprime_metricas(self);
+
+  return 1;
+}
+
 // função a ser chamada pela CPU quando executa a instrução CHAMAC, no tratador de
 //   interrupção em assembly
 // essa é a única forma de entrada no SO depois da inicialização
@@ -261,6 +415,11 @@ static int so_trata_interrupcao(void *argC, int reg_A)
   irq_t irq = reg_A;
   // esse print polui bastante, recomendo tirar quando estiver com mais confiança
   //console_printf("SO: recebi IRQ %d (%s)", irq, irq_nome(irq));
+
+  self->metricas.n_interrupcoes[irq]++;
+
+  calcula_metricas(self);
+
   // salva o estado da cpu no descritor do processo que foi interrompido
   so_salva_estado_da_cpu(self);
   // faz o atendimento da interrupção
@@ -271,7 +430,12 @@ static int so_trata_interrupcao(void *argC, int reg_A)
   so_escalona(self);
   // recupera o estado do processo escolhido
 
-  return so_despacha(self);
+  if (!tudo_morreu(self)){
+    return so_despacha(self);
+  }
+  else{
+    return finaliza_so(self);
+  }
 }
 
 static void so_salva_estado_da_cpu(so_t *self)
@@ -307,6 +471,7 @@ void trata_le(so_t *self, processo_t *proc){
   if (es_le(self->es, terminal_processo(terminal, TECLADO_OK), &estado) == ERR_OK && estado != 0) {
     proc->razao = OK;
     proc->estado = PRONTO;
+    proc->metricas.n_estados[proc->estado]++;
     ajusta_fila(self, proc);
     console_printf("SO: desbloqueado processo %d. haha - leitura", proc->process_id);
   }
@@ -322,6 +487,7 @@ void trata_escreve(so_t *self, processo_t *proc){
     if (es_escreve(self->es, terminal_processo(terminal, TELA), dado) == ERR_OK) {
       proc->razao = OK;
       proc->estado = PRONTO;
+      proc->metricas.n_estados[proc->estado]++;
       ajusta_fila(self, proc);
       console_printf("SO: desbloqueado processo %d. haha - escrita", proc->process_id);
     }
@@ -337,6 +503,7 @@ static void trata_espera(so_t *self, processo_t *proc){
   if (alvo->estado == MORTO){
     proc->estado = PRONTO;
     proc->razao = OK;
+    proc->metricas.n_estados[proc->estado]++;
     ajusta_fila(self, proc);
     console_printf("SO: desbloqueado processo %d. haha - espera", proc->process_id);
     return;
@@ -376,7 +543,15 @@ static void so_trata_pendencias(so_t *self)
 
 }
 
+void calcula_prioridade(so_t *self, processo_t *proc){
+  if (proc == NULL) return;
+  proc->prioridade = proc->prioridade + (QUANTUM - self->quantum) / (float)QUANTUM / 2;
+}
+
 static void so_escalona(so_t *self){
+
+  calcula_prioridade(self, self->processo_corrente);
+
   switch (ESCALONADOR)
   {
   case 0:
@@ -439,6 +614,7 @@ static void so_escalona_simples(so_t *self)
 void ajusta_fila_pronto(so_t *self, processo_t *proc){
   remove_fila(self, proc->process_id);
   ajusta_fila(self, proc);
+  self->processo_corrente = NULL;
 }
 
 static void so_escalona_round_robin(so_t *self){
@@ -447,6 +623,7 @@ static void so_escalona_round_robin(so_t *self){
   }
 
   if (self->processo_corrente != NULL && self->processo_corrente->estado == PRONTO && self->quantum == 0){
+    self->processo_corrente->metricas.preempcoes++;
     ajusta_fila_pronto(self, self->processo_corrente);
   }
 
@@ -465,9 +642,17 @@ static void so_escalona_round_robin(so_t *self){
   }
 }
 
-void calcula_prioridade(so_t *self, processo_t *proc){
-  float t_exec = (float)(QUANTUM - self->quantum);
-  proc->prioridade = (proc->prioridade + t_exec / (float)QUANTUM) / 2;
+void ordena_fila_prioridade(so_t *self){
+  processo_t *aux;
+  for (int i = 0; i < tam_fila(self); i++){
+    for (int j = i + 1; j < tam_fila(self); j++){
+      if (self->fila_prontos[i]->prioridade > self->fila_prontos[j]->prioridade){
+        aux = self->fila_prontos[i];
+        self->fila_prontos[i] = self->fila_prontos[j];
+        self->fila_prontos[j] = aux;
+      }
+    }
+  }
 }
 
 static void so_escalona_prioridade(so_t *self){
@@ -476,18 +661,13 @@ static void so_escalona_prioridade(so_t *self){
   }
 
   if (self->processo_corrente != NULL && self->processo_corrente->estado == PRONTO && self->quantum == 0){
-    calcula_prioridade(self, self->processo_corrente);
+    self->processo_corrente->metricas.preempcoes++;
     ajusta_fila_pronto(self, self->processo_corrente);
   }
 
   if (tam_fila(self) != 0) {
-    processo_t *maior = self->fila_prontos[0];
-    for (int i = 1; i < tam_fila(self); i++){
-      if (self->fila_prontos[i]->prioridade > maior->prioridade){
-        maior = self->fila_prontos[i];
-      }
-    }
-    self->processo_corrente = maior;
+    ordena_fila_prioridade(self);
+    self->processo_corrente = self->fila_prontos[0];
     self->quantum = QUANTUM;
     return;
   }
@@ -693,6 +873,7 @@ static void so_chamada_le(so_t *self)
     console_printf("SO: teclado não disponível");
     self->processo_corrente->estado = BLOQUEADO;
     self->processo_corrente->razao = LEITURA;
+    self->processo_corrente->metricas.n_estados[self->processo_corrente->estado]++;
     calcula_prioridade(self, self->processo_corrente);
     remove_fila(self, self->processo_corrente->process_id);
     return;
@@ -735,6 +916,7 @@ static void so_chamada_escr(so_t *self)
     console_printf("SO: tela não disponível");
     self->processo_corrente->estado = BLOQUEADO;
     self->processo_corrente->razao = ESCRITA;
+    self->processo_corrente->metricas.n_estados[self->processo_corrente->estado]++;
     calcula_prioridade(self, self->processo_corrente);
     remove_fila(self, self->processo_corrente->process_id);
     return;
@@ -841,6 +1023,7 @@ static void so_chamada_espera_proc(so_t *self)
   if (alvo->estado != MORTO){
     proc->estado = BLOQUEADO;
     proc->razao = ESPERANDO_MORRER;
+    proc->metricas.n_estados[proc->estado]++;
     calcula_prioridade(self, proc);
     remove_fila(self, proc->process_id);
     return;
@@ -849,6 +1032,7 @@ static void so_chamada_espera_proc(so_t *self)
   proc->estado = PRONTO;
   proc->razao = OK;
   proc->reg_a = 0;
+  proc->metricas.n_estados[proc->estado]++;
 }
 
 // CARGA DE PROGRAMA {{{1
