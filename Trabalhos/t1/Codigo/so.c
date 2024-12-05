@@ -474,6 +474,10 @@ void trata_le(so_t *self, processo_t *proc){
     proc->metricas.n_estados[proc->estado]++;
     ajusta_fila(self, proc);
     console_printf("SO: desbloqueado processo %d. haha - leitura", proc->process_id);
+
+    int dado;
+    es_le(self->es, terminal_processo(terminal, TECLADO), &dado);
+    proc->reg_a = dado;
   }
   return;
 }
@@ -545,7 +549,7 @@ static void so_trata_pendencias(so_t *self)
 
 void calcula_prioridade(so_t *self, processo_t *proc){
   if (proc == NULL) return;
-  proc->prioridade = proc->prioridade + (QUANTUM - self->quantum) / (float)QUANTUM / 2;
+  proc->prioridade = (proc->prioridade + (QUANTUM - self->quantum) / (float)QUANTUM) / 2;
 }
 
 static void so_escalona(so_t *self){
@@ -890,7 +894,7 @@ static void so_chamada_le(so_t *self)
   // T1: se houvesse processo, deveria escrever no reg A do processo
   // T1: o acesso só deve ser feito nesse momento se for possível; se não, o processo
   //   é bloqueado, e o acesso só deve ser feito mais tarde (e o processo desbloqueado)
-  mem_escreve(self->mem, IRQ_END_A, dado);
+  self->processo_corrente->reg_a = dado;
 }
 
 // implementação da chamada se sistema SO_ESCR
@@ -931,7 +935,7 @@ static void so_chamada_escr(so_t *self)
       return;
     }
 
-    mem_escreve(self->mem, IRQ_END_A, 0);
+    self->processo_corrente->reg_a = 0;
   }
 }
 
@@ -968,7 +972,6 @@ static void so_chamada_cria_proc(so_t *self)
   // deveria escrever -1 (se erro) ou o PID do processo criado (se OK) no reg A
   //   do processo que pediu a criação
   proc->reg_a = -1;
-  mem_escreve(self->mem, IRQ_END_A, -1);
 }
 
 // implementação da chamada se sistema SO_MATA_PROC
@@ -1000,7 +1003,6 @@ static void so_chamada_mata_proc(so_t *self)
   }
   else{
     proc->reg_a = -1;
-    mem_escreve(self->mem, IRQ_END_A, -1);
   }
 }
 
